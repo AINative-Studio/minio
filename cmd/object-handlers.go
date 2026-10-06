@@ -2296,6 +2296,18 @@ func (api objectAPIHandlers) PutObjectExtractHandler(w http.ResponseWriter, r *h
 			writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Err), r.URL)
 			return
 		}
+	case authTypeStreamingUnsignedTrailer:
+		// Matches PutObjectHandler's handling of this auth type (CVE-2026-40344 fix):
+		// this case was previously missing here, so a request using the
+		// unsigned-trailer streaming auth type fell through this switch with
+		// no signature/checksum verification at all, needing only a known
+		// access key (checked by isPutActionAllowed above for authorization,
+		// not authentication) to write arbitrary object content.
+		reader, s3Err = newUnsignedV4ChunkedReader(r, true, r.Header.Get(xhttp.Authorization) != "")
+		if s3Err != ErrNone {
+			writeErrorResponse(ctx, w, errorCodes.ToAPIErr(s3Err), r.URL)
+			return
+		}
 	case authTypeSignedV2, authTypePresignedV2:
 		s3Err = isReqAuthenticatedV2(r)
 		if s3Err != ErrNone {
