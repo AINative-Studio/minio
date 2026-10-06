@@ -1,0 +1,26 @@
+# Builds MinIO entirely from this fork's source — no dependency on the
+# now-deleted minio/minio upstream image. Unblocks zerodb-local, whose
+# docker-compose.yml pulled minio/minio:latest, which upstream removed
+# from Docker Hub on 2026-09-11 (OSS edition archived 2026-02-13).
+FROM golang:1.24-bookworm AS build
+
+WORKDIR /src
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$(go env GOARCH) \
+    go build -tags kqueue -trimpath \
+    --ldflags "$(go run buildscripts/gen-ldflags.go)" \
+    -o /out/minio
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /out/minio /usr/bin/minio
+COPY dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
+RUN chmod +x /usr/bin/minio /usr/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
+VOLUME ["/data"]
+CMD ["minio"]
