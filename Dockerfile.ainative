@@ -1,0 +1,46 @@
+# AINative's own from-source build of this MinIO fork.
+#
+# Upstream's own Dockerfile and Dockerfile.release both depend on dead
+# infrastructure: Dockerfile's `FROM minio/minio:latest` needs Docker Hub's
+# now-removed minio/minio image, and Dockerfile.release's build stage curls
+# pre-built binaries from dl.min.io, which now returns 410 Gone for every
+# release ("archived and no longer maintained... files are no longer served
+# from this site"). Neither can build anything, regardless of registry
+# access. This Dockerfile compiles the vendored Go source directly instead,
+# with no dependency on either dead service -- the same `go build` the
+# repo's own `make build` target already uses.
+FROM golang:1.24-alpine AS build
+
+ARG TARGETARCH
+
+ENV CGO_ENABLED=0
+WORKDIR /build
+
+RUN apk add --no-cache git
+
+COPY . .
+
+# gen-ldflags.go shells out to `git log` to stamp commit metadata into the
+# binary's version string -- cosmetic only (`mc --version` style output),
+# not required for MinIO to run. The build context here is a vendored git
+# submodule with .git excluded by .dockerignore (and even if copied, a
+# submodule's .git is just a gitfile pointer into the parent repo, not a
+# usable standalone repo on its own), so give it a real, buildable repo to
+# read instead of fighting to reconstruct the original history.
+RUN git init -q && git add -A && git -c user.email=build@local -c user.name=build commit -q -m "local build" && \
+    GOARCH=${TARGETARCH} go run buildscripts/gen-ldflags.go > /tmp/ldflags.txt && \
+    GOARCH=${TARGETARCH} go build -tags kqueue -trimpath --ldflags "$(cat /tmp/ldflags.txt)" -o /build/minio .
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+COPY --from=build /build/minio /usr/bin/minio
+COPY dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
+RUN chmod +x /usr/bin/docker-entrypoint.sh
+
+EXPOSE 9000
+VOLUME ["/data"]
+
+ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
+CMD ["minio"]
